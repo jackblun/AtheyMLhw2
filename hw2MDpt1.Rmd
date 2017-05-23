@@ -118,7 +118,7 @@ char.censored <- char[selection,] #remove observations via propensity score rule
 ```
 
 
-Further setup our data ready to feed into functions
+Further setup our data ready to feed into functions.
 
 ```{r obs setup.obs, echo=F, message=FALSE, warning=FALSE}
 
@@ -174,13 +174,13 @@ linearhet <- paste("Y", paste("W * (", sumx, ") ", sep=""), sep=" ~ ")
 linearhet <- as.formula(linearhet)
 linearhet
 
-#### LOOK AT THIS AGAIN! 
+#### LOOK AT THIS AGAIN! (note that this is not used in part I))
 ##### NEED TO ADJUST PROPENSITY SCORE!
-processed.scaled.test$propens <- mean(processed.scaled.test$W) #note this is randomized experiment so will use constant propens
-processed.scaled.test$Ystar <- processed.scaled.test$W * (processed.scaled.test$Y/processed.scaled.test$propens) -
-  (1-processed.scaled.test$W) * (processed.scaled.test$Y/(1-processed.scaled.test$propens))
-MSElabelvec <- c("")
-MSEvec <- c("")
+#processed.scaled.test$propens <- mean(processed.scaled.test$W) #note this is randomized experiment so will use constant propens
+#processed.scaled.test$Ystar <- processed.scaled.test$W * (processed.scaled.test$Y/processed.scaled.test$propens) -
+#  (1-processed.scaled.test$W) * (processed.scaled.test$Y/(1-processed.scaled.test$propens))
+#MSElabelvec <- c("")
+#MSEvec <- c("")
 
 ```
 
@@ -250,11 +250,11 @@ plot(pfvar)
 
 
 # calculate MSE against Ystar
-pfMSEstar <- mean((processed.scaled.test$Ystar-pfpredtest)^2)
-print(c("MSE using ystar on test set of causalTree/propforest",pfMSEstar))
+#pfMSEstar <- mean((processed.scaled.test$Ystar-pfpredtest)^2)
+#print(c("MSE using ystar on test set of causalTree/propforest",pfMSEstar))
 
-MSElabelvec <- append(MSElabelvec,"propensity forest")
-MSEvec <- append(MSEvec,pfMSEstar)
+#MSElabelvec <- append(MSElabelvec,"propensity forest")
+#MSEvec <- append(MSEvec,pfMSEstar)
 
 ```
 
@@ -279,10 +279,10 @@ plot(preds.causal.test$predictions, preds.causal.test$variance.estimates)
 
 
 # calculate MSE against Ystar
-gfMSEstar <- mean((processed.scaled.test$Ystar-preds.causal.test$predictions)^2)
-print(c("MSE using ystar on test set of gradient causal forest",gfMSEstar))
-MSElabelvec <- append(MSElabelvec,"gradient causal forest")
-MSEvec <- append(MSEvec,gfMSEstar)
+#gfMSEstar <- mean((processed.scaled.test$Ystar-preds.causal.test$predictions)^2)
+#print(c("MSE using ystar on test set of gradient causal forest",gfMSEstar))
+#MSElabelvec <- append(MSElabelvec,"gradient causal forest")
+#MSEvec <- append(MSEvec,gfMSEstar)
 
 ```
 
@@ -311,10 +311,10 @@ mean(preds.causalr.test$predictions)
 plot(preds.causalr.test$predictions, preds.causal.test$variance.estimates)
 
 # calculate MSE against Ystar
-gfrMSEstar <- mean((processed.scaled.test$Ystar-preds.causalr.test$predictions)^2)
-print(c("MSE using ystar on test set of orth causal gradient forest",gfrMSEstar))
-MSElabelvec <- append(MSElabelvec,"orth causal gradient forest")
-MSEvec <- append(MSEvec,gfrMSEstar)
+#gfrMSEstar <- mean((processed.scaled.test$Ystar-preds.causalr.test$predictions)^2)
+#rint(c("MSE using ystar on test set of orth causal gradient forest",gfrMSEstar))
+#MSElabelvec <- append(MSElabelvec,"orth causal gradient forest")
+#MSEvec <- append(MSEvec,gfrMSEstar)
 
 
 ```

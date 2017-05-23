@@ -42,13 +42,23 @@ As in the previous homework, we use data from ``Does Price Matter in Charitable 
 
 \section{Observational study}
 
+This first set of methods is applied to our censored data, emulating observational data with non-random treatment assignment.
+
 \subsection{Propensity forest}
 
-Propensity forest. Basically just estimating prop score using a random forest. Then doing standard propensity score matching. 
+Our first method is propensity forest from package causalTree. In this method, we use a random forest where in each tree we split the sample into leaves based on propensity score, then estimate the treatment effect within each leaf. This is then a fairly natural extension of propensity score matching using machine learning methods. We can summarise the estimates with the average treatment effect, calculated by averaging over all estimated treatment effects. In doing so, we get an estimate of $0.2661$. Relative to our estimates in homework 1...
+
 
 \subsection{Gradient forest}
 
-See from slide 31 in lecture slides 6b. Get a forest based kernel from averaging tree-based neighborhoods. Local solutions. Data adaptive kernel weights.
+Gradient forests (Athey, Tibshirani and Wager 2016) allows the estimation of heterogeneous parameters at a particular point in covariate space by using 'neighborhoods' of observations in a training set. Many existing methods to do this suffer from the curse of dimensionality and are extremely computationally intensive. Gradient forests solves many of these computational problems, using an adaptive weighting function derived from random forests. When fitting trees, observations are labeled with the gradient of the estimating equation. Next, as is standard when using trees, observations are split into leaves and parameters of interest are estimated within leaves. Importantly, it has been shown that this method delivers consistent, asymptotically normal estimates.
+
+Using gradient forest on the raw data, we obtain an estimated ATE of $ $.
+
+As an alternative, we first residualize our data. To do so, we use a random forest to predict our outcome and treatment variables, based on covariates. We then subtract these predicted values to obtain residuals. With these residuals of $Y$ and $W$ we then run gradient forest just as above. We obtain an estimated ATE of $ $.
+
+Comparing to our other estimates, we see that...
+
 
 \section{Randomized trial}
 
