@@ -251,9 +251,76 @@ MSEvec <- append(MSEvec,lassoMSEstar)
 
 ```
 
+# Honest causal tree. Note that this is more manual than Athey wants. Could do just in honest causal tree command.
+
+```{r hon.causal.tree, echo=F, message=FALSE, warning=FALSE}
+
+# Set parameters
+split.Rule.temp = "CT"
+cv.option.temp = "CT"
+split.Honest.temp = T
+cv.Honest.temp = T
+split.alpha.temp = .5
+cv.alpha.temp = .5
+split.Bucket.temp = T
+bucketMax.temp= 100
+bucketNum.temp = 5
+minsize.temp=50
+
+# get the dishonest version--estimated leaf effects on training sample
+CTtree <- causalTree(as.formula(paste("Y~",sumx)), 
+                   data=processed.scaled.train.1, treatment=processed.scaled.train.1$W, 
+                   split.Rule=split.Rule.temp, split.Honest=split.Honest.temp, 
+                   split.Bucket=split.Bucket.temp, bucketNum = bucketNum.temp, 
+                   bucketMax = bucketMax.temp, cv.option=cv.option.temp, cv.Honest=cv.Honest.temp, 
+                   minsize = minsize.temp, 
+                   split.alpha = split.alpha.temp, cv.alpha = cv.alpha.temp, 
+                   HonestSampleSize=nrow(processed.scaled.train.2),
+                   cp=0)
+opcpid <- which.min(CTtree$cp[,4])
+opcp <- CTtree$cp[opcpid,1]
+tree_dishonest_CT_prune <- prune(CTtree, cp = opcp) 
+
+# we can get the honest tree manually, by estimating the leaf effects on a new sample
+tree_honest_CT_prune2 <- estimate.causalTree(object=tree_dishonest_CT_prune,
+                                             data=processed.scaled.train.1, 
+                                             treatment=processed.scaled.train.1$W)
+
+print(tree_honest_CT_prune2)
+
+processed.scaled.train.1$leaffact <- as.factor(round(predict(tree_dishonest_CT_prune, 
+                                        newdata=processed.scaled.train.1,type="vector"),4))
+processed.scaled.train.2$leaffact <- as.factor(round(predict(tree_dishonest_CT_prune, 
+                                                             newdata=processed.scaled.train.2,type="vector"),4))
+processed.scaled.test$leaffact <- as.factor(round(predict(tree_dishonest_CT_prune, 
+                                                             newdata=processed.scaled.test,type="vector"),4))
+
+# These show leaf treatment effects and standard errors; can test hypothesis that leaf 
+# treatment effects are 0
+summary(lm(Y~leaffact+W*leaffact-W-1, data=processed.scaled.train.1))
+summary(lm(Y~leaffact+W*leaffact-W-1, data=processed.scaled.train.2))
+summary(lm(Y~leaffact+W*leaffact-W-1, data=processed.scaled.test))
+
+#This specification tests whether leaf treatment effects are different than average
+summary(lm(Y~leaffact+W*leaffact-1, data=processed.scaled.train.2))
+
+
+CTpredict = predict(tree_honest_CT_prune2, newdata=processed.scaled.test, type="vector")
+# calculate MSE against Ystar
+CTMSEstar <- mean((processed.scaled.test$Ystar-CTpredict)^2)
+print(c("MSE using ystar on test set of single forest",CTMSEstar))
+MSElabelvec <- append(MSElabelvec,"causal tree")
+MSEvec <- append(MSEvec,CTMSEstar)
+
+
+
+
+```
+
+
 # Now lets try to use causalForest from the causalTree package
 
-```{r obs causal.tree, echo=F, message=FALSE, warning=FALSE}
+```{r obs causal.f, echo=F, message=FALSE, warning=FALSE}
 
 
 ncolx<-length(processed.scaled.train)-2 # number of covariates

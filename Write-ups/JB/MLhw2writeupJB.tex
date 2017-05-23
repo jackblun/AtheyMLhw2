@@ -1,0 +1,63 @@
+\documentclass[paper=letter, fontsize=11pt]{scrartcl} % A4 paper and 11pt font size
+\newcommand{\horrule}[1]{\rule{\linewidth}{#1}} % Create horizontal rule command with 1 argument of height
+\setlength{\parskip}{1em}
+\setlength{\parindent}{3em}
+\usepackage{listings}
+
+\usepackage{hyperref}
+\usepackage{enumerate}
+\usepackage{amsmath}
+\usepackage{geometry}
+ \geometry{
+ bottom=1in,
+ right=1in,
+ left=1in,
+ top=1in,
+ }
+
+ \usepackage[flushleft]{threeparttable}
+\usepackage[capposition=top]{floatrow}
+
+\usepackage{graphicx}
+ \graphicspath{ {../figures/} }
+
+\title{	
+\normalfont \normalsize 
+\horrule{0.5pt} \\[0.4cm] % Thin top horizontal rule
+ \large{{\textbf{ECON 293 Homework 2: Commentary}}} \\ % The assignment title
+\horrule{2pt} \\[0.5cm] % Thick bottom horizontal rule
+}
+
+\author{\small{Jack Blundell, Spring 2017}} % Your name
+
+\date{} % Today's date or a custom date
+
+\begin{document}
+
+\maketitle % Print the title
+
+In this commentary I discuss results and include some key figures. Many further figures and all code are provided in the attached .html file. I worked with Luis Armona on the code. This commentary is written individually.
+
+As in the previous homework, we use data from ``Does Price Matter in Charitable Giving? Evidence from a Large-Scale Natural Field Experiment", by Dean Karlan and John List (AER 2007). In this experiment, two-thirds of recipients of a charity solicitation letter receive some kind of match-donation treatment, whereas the remaining control group receives the letter alone, with no matching promise. We use the same censoring rule as in homework 1 to eliminate observations, emulating an observational study for the first part of this homework.
+
+\section{Observational study}
+
+\subsection{Propensity forest}
+
+Propensity forest. Basically just estimating prop score using a random forest. Then doing standard propensity score matching. 
+
+\subsection{Gradient forest}
+
+See from slide 31 in lecture slides 6b. Get a forest based kernel from averaging tree-based neighborhoods. Local solutions. Data adaptive kernel weights.
+
+\section{Randomized trial}
+
+\subsection{LASSO}
+
+\subsection{Honest causal tree}
+
+\subsection{Causal forest}
+
+\subsection{Causal forest (Gradient forest)}
+
+\end{document}
