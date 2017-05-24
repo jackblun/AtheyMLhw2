@@ -46,33 +46,12 @@ char <- read.csv(fname)
 
 ```
 
-## feature engineering (old. remove?)
-
-```{r feat, echo=F, message=FALSE, warning=FALSE}
-
-covars.all <- char[,c(14:22,23:63)] # skip the state indicator used for summ stats
-# formula to interact all covariates no interactions for missing dummies.
-# for tractability, we interact individ. covars with each other, and state vars with each other
-# create design matrix storing all features
-covars.regular <-char[,c(14:22,23:44)]
-covars.missing <- char[,c(45:63)]
-int.level = 2 #the degree of interaction between covariates that are not missing dummies
-covars.poly.str = paste('(', paste(names(covars.regular)[1:9],collapse='+'),')^',int.level,
-                        ' + (', paste(names(covars.regular)[11:31],collapse='+'),')^',int.level,
-                        ' + ',paste(names(covars.missing),collapse='+'),sep='') 
-#covars.poly.str = paste('(', paste(names(covars.regular),collapse='+'),')^',int.level,
-#                        ' + ',paste(names(covars.missing),collapse='+'),sep='') 
-covars.poly <-model.matrix(as.formula(paste('~ ',covars.poly.str)),data=char)
-
-```
-
-
 First drop observations as in HW1 to make this into an observational study
 
 ```{r drop, echo=TRUE}
 
 #randomly censor individuals
-# via a  complex, highly nonlinear fcn  of votes 4 bush in state,
+# via a  complex, highly nonlinear fcn 
 #
 
 ps.fcn <- function(v,c,pg,t){
@@ -117,10 +96,9 @@ char.censored <- char[selection,] #remove observations via propensity score rule
 
 ```
 
-
 Further setup our data ready to feed into functions.
 
-```{r obs setup.obs, echo=F, message=FALSE, warning=FALSE}
+```{r obs setup.obs, echo=T}
 
 # Extract the dependent variable
 Y <- char.censored[["out_amountgive"]]
@@ -129,7 +107,7 @@ Y <- char.censored[["out_amountgive"]]
 W <- char.censored[["treatment"]]
 
 # Extract covariates
-covariates <- char.censored[,c(14:22,23:44)]
+covariates <- char.censored[,c(14:22,23:63)] # inc missing dummies for now
 covariate.names <- names(covariates)
 
 # standardize
@@ -137,7 +115,7 @@ covariates.scaled <- scale(covariates)
 processed.unscaled <- data.frame(Y, W, covariates)
 processed.scaled <- data.frame(Y, W, covariates.scaled)
 
-# training, validation, and test sets.
+# training and test sets.
 set.seed(44)
 smplmain <- sample(nrow(processed.scaled), round(9*nrow(processed.scaled)/10), replace=FALSE)
 
@@ -147,47 +125,23 @@ processed.scaled.test <- processed.scaled[-smplmain,]
 y.train <- as.matrix(processed.scaled.train$Y, ncol=1)
 y.test <- as.matrix(processed.scaled.test$Y, ncol=1)
 
-# 45-45-10 sample
-smplcausal <- sample(nrow(processed.scaled.train), 
-                     round(5*nrow(processed.scaled.train)/10), replace=FALSE)
-processed.scaled.train.1 <- processed.scaled.train[smplcausal,]
-processed.scaled.train.2 <- processed.scaled.train[-smplcausal,]
-
 # as formulas
 print(covariate.names)
 sumx = paste(covariate.names, collapse = " + ")  # "X1 + X2 + X3 + ..." for substitution later
 interx = paste(" (",sumx, ")^2", sep="")  # "(X1 + X2 + X3 + ...)^2" for substitution later
 
-# Y ~ X1 + X2 + X3 + ... 
-linearnotreat <- paste("Y",sumx, sep=" ~ ")
-linearnotreat <- as.formula(linearnotreat)
-linearnotreat
-
-# Y ~ W + X1 + X2 + X3 + ...
-linear <- paste("Y",paste("W",sumx, sep=" + "), sep=" ~ ")
-linear <- as.formula(linear)
-linear
-
-# Y ~ W * (X1 + X2 + X3 + ...)   
-# ---> X*Z means include these variables plus the interactions between them
-linearhet <- paste("Y", paste("W * (", sumx, ") ", sep=""), sep=" ~ ")
-linearhet <- as.formula(linearhet)
-linearhet
-
-#### LOOK AT THIS AGAIN! (note that this is not used in part I))
-##### NEED TO ADJUST PROPENSITY SCORE!
-#processed.scaled.test$propens <- mean(processed.scaled.test$W) #note this is randomized experiment so will use constant propens
-#processed.scaled.test$Ystar <- processed.scaled.test$W * (processed.scaled.test$Y/processed.scaled.test$propens) -
-#  (1-processed.scaled.test$W) * (processed.scaled.test$Y/(1-processed.scaled.test$propens))
-#MSElabelvec <- c("")
-#MSEvec <- c("")
-
 ```
 
 Next set some parameters for causal tree / forest
 
-```{r obs setup.params, echo=F, message=FALSE, warning=FALSE}
+```{r obs setup.params, echo=T}
+# Create additional datasets
 
+processed.scaled.testW0 <- processed.scaled.test
+processed.scaled.testW0$W <- rep(0,nrow(processed.scaled.test))
+
+processed.scaled.testW1 <- processed.scaled.test
+processed.scaled.testW1$W <- rep(1,nrow(processed.scaled.test))
 
 # causal tree/forest params
 
@@ -204,24 +158,15 @@ bucketNum.temp = 5
 minsize.temp=50
 
 
-# Some of the models need to get causal effects out by comparing mu(X,W=1)-mu(X,W=0).  Create datasets to do that easily
-
-processed.scaled.testW0 <- processed.scaled.test
-processed.scaled.testW0$W <- rep(0,nrow(processed.scaled.test))
-
-
-processed.scaled.testW1 <- processed.scaled.test
-processed.scaled.testW1$W <- rep(1,nrow(processed.scaled.test))
-
-# make this bigger -- say 2000 -- if run time permits
-numtreesCT <- 200
-numtreesGF <- 200
+# number of trees (try 1000 once all working)
+numtreesCT <- 1000
+numtreesGF <- 1000
 
 ```
 
-# Now lets try propensity forest
+Now lets try propensity forest. Remember no honest estimation here.
 
-```{r obs propens.forest, echo=F, message=FALSE, warning=FALSE}
+```{r obs propens.forest, echo=F}
 
 
 # Propensity forest
@@ -247,20 +192,11 @@ print(c("mean of ATE treatment effect from propensityForest on Training data",
 pfvar <- infJack(pfpredtrainall$individual, pf$inbag, calibrate = TRUE)
 plot(pfvar)
 
-
-
-# calculate MSE against Ystar
-#pfMSEstar <- mean((processed.scaled.test$Ystar-pfpredtest)^2)
-#print(c("MSE using ystar on test set of causalTree/propforest",pfMSEstar))
-
-#MSElabelvec <- append(MSElabelvec,"propensity forest")
-#MSEvec <- append(MSEvec,pfMSEstar)
-
 ```
 
 # Now lets try gradient forest, first without residualizing
 
-```{r obs gradient.forest, echo=F, message=FALSE, warning=FALSE}
+```{r obs gradient.forest, echo=T}
 
 X = as.matrix(processed.scaled.train[,covariate.names])
 X.test = as.matrix(processed.scaled.test[,covariate.names])
@@ -271,50 +207,43 @@ gf <- causal.forest(X, Y, W, num.trees = numtreesGF, ci.group.size = 4,
                     precompute.nuisance = FALSE)
 preds.causal.oob = predict(gf, estimate.variance=TRUE)
 preds.causal.test = predict(gf, X.test, estimate.variance=TRUE)
+
+# training set
 mean(preds.causal.oob$predictions)  
 plot(preds.causal.oob$predictions, preds.causal.oob$variance.estimates)
 
+# test set (honest)
 mean(preds.causal.test$predictions)  
 plot(preds.causal.test$predictions, preds.causal.test$variance.estimates)
-
-
-# calculate MSE against Ystar
-#gfMSEstar <- mean((processed.scaled.test$Ystar-preds.causal.test$predictions)^2)
-#print(c("MSE using ystar on test set of gradient causal forest",gfMSEstar))
-#MSElabelvec <- append(MSElabelvec,"gradient causal forest")
-#MSEvec <- append(MSEvec,gfMSEstar)
 
 ```
 
 # Next the same but residualizing
 
-```{r obs gradient.forest, echo=F, message=FALSE, warning=FALSE}
+```{r obs gradient.forest.res, echo=T}
 
-
+# orthogonalize Y
 Yrf <- regression.forest(X, Y, num.trees = numtreesGF, ci.group.size = 4)
 Yresid <- Y - predict(Yrf)$prediction
 
-# orthogonalize W -- if obs study
+# orthogonalize W 
 Wrf <- regression.forest(X, W, num.trees = numtreesGF, ci.group.size = 4)
-Wresid <- W - predict(Wrf)$predictions # use if you are orthogonalizing W, e.g. for obs study
+Wresid <- W - predict(Wrf)$predictions
 
 
 gfr <- causal.forest(X,Yresid,Wresid,num.trees=numtreesGF, ci.group.size=4, 
                      precompute.nuisance = FALSE)
+
+# training set
 preds.causalr.oob = predict(gfr, estimate.variance=TRUE)
 mean(preds.causalr.oob$predictions)  
 plot(preds.causalr.oob$predictions, preds.causal.oob$variance.estimates)
 
+# test set (honest)
 Xtest = as.matrix(processed.scaled.test[,covariate.names])
 preds.causalr.test = predict(gfr, Xtest, estimate.variance=TRUE)
 mean(preds.causalr.test$predictions)  
 plot(preds.causalr.test$predictions, preds.causal.test$variance.estimates)
-
-# calculate MSE against Ystar
-#gfrMSEstar <- mean((processed.scaled.test$Ystar-preds.causalr.test$predictions)^2)
-#rint(c("MSE using ystar on test set of orth causal gradient forest",gfrMSEstar))
-#MSElabelvec <- append(MSElabelvec,"orth causal gradient forest")
-#MSEvec <- append(MSEvec,gfrMSEstar)
 
 
 ```
