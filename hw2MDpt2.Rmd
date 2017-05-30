@@ -345,10 +345,6 @@ MSEvec <- append(MSEvec,CTMSEstar)
 
 ```{r obs causal.f, echo=T}
 
-ncolx<-length(processed.scaled.train)-3 # number of possible covariates to bag from
-ncov_sample<-floor(ncolx/3) #number of covariates (randomly sampled) to use to build tree
-# ncov_sample<-p #use this line if all covariates need to be used in all trees
-
 # set seed
 set.seed(123)
 # now estimate a causalForest. Train on A and B.
@@ -452,19 +448,21 @@ names(D.focus) = namesD[c(-1,-2)]
 df.heat = expand.grid(hpa=unique.hpa, perbush=unique.perbush)
 
 df.heat$cate=  predict(cf.gf, newdata=D.focus,estimate.variance=FALSE)$predictions
-df.heat$hpa <- df.heat$hpa *sd(char[,'hpa']) + mean(char[,'hpa'])
-df.heat$perbush <- df.heat$perbush *sd(char[,'perbush']) + mean(char[,'perbush'])
+df.heat$hpa <- as.factor(df.heat$hpa *sd(char[,'hpa']) + mean(char[,'hpa']))
+df.heat$perbush <- as.factor(df.heat$perbush *sd(char[,'perbush']) + mean(char[,'perbush']))
 
-
+levels(df.heat$hpa) <- levels(as.factor(round(as.numeric(as.character(df.heat$hpa)),2)))
+levels(df.heat$perbush) <- levels(as.factor(round(as.numeric(as.character(df.heat$perbush)),4)))
 #ggplot(df.heat, aes(x=hpa,y=perbush,fill=cate,colour=cate)) + geom_tile() +
 #  scale_fill_gradient(low = "red", high = "blue") + scale_colour_gradient(low = "red", high = "blue")
 
 #ggplot(df.heat, aes(x=hpa,y=perbush,fill=cate)) + geom_raster(interpolate=F) 
-ggplot(df.heat, aes(x=factor(hpa),y=factor(perbush),fill=cate,colour=cate)) + geom_tile() +
-  scale_x_discrete(breaks = levels(factor(df.heat$hpa))[c(T, rep(F, 50))]) +
-  scale_y_discrete(breaks = levels(factor(df.heat$perbush))[c(T, rep(F, 9))]) + 
+gg<-ggplot(df.heat, aes(x=hpa,y=perbush,fill=cate,colour=cate)) + geom_tile() +
+  scale_x_discrete(breaks = levels(factor(df.heat$hpa))[c(T, rep(F, 14))]) +
+  scale_y_discrete(breaks = levels(factor(df.heat$perbush))[c(T, rep(F, 4))]) + 
   ylab("% voted for Bush in '04 ")  + xlab('Previous contribution ($)') +
   scale_fill_gradient(low = "red", high = "blue") + scale_colour_gradient(low = "red", high = "blue")
+print(gg)
 ggsave('heatmap.pdf')
 
 # calculate MSE against Ystar
