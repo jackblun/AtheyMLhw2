@@ -14,8 +14,8 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r load, echo=F, message=FALSE, warning=FALSE}
 # set your working directory
 
-setwd("C:/Users/Jack/Documents/Git/AtheyMLhw2") # Jack
-#setwd('/home/luis/AtheyMLhw1') #Luis
+#setwd("C:/Users/Jack/Documents/Git/AtheyMLhw2") # Jack
+setwd('/home/luis/AtheyMLhw2') #Luis
 # clear things in RStudio
 
 rm(list = ls())
@@ -37,9 +37,6 @@ library(plyr)
 library(gradient.forest)
 
 
-
-# set seed
-set.seed(12345)
 
 fname <- 'Data/charitable_withdummyvariables.csv'
 char <- read.csv(fname)
@@ -90,6 +87,10 @@ for (v in names(char)){
 
 # Selection rule (=1 of uniform random [0,1] is lower, so those with higher ps.true more likely to be selected)
 selection <- runif(nrow(char)) <= char$ps.select
+prop.treat <-  mean(char$treatment)
+char$ps.select.t <- ps.fcn(char$perbush,char$cases,char$hpa,1)
+char$ps.select.c <- ps.fcn(char$perbush,char$cases,char$hpa,0)
+char$ps.true <- (prop.treat*char$ps.select.t)/(prop.treat*char$ps.select.t + (1 - prop.treat)*char$ps.select.c)
 
 char.censored <- char[selection,] #remove observations via propensity score rule
 
@@ -106,26 +107,26 @@ Y <- char.censored[["out_amountgive"]]
 # Extract treatment
 W <- char.censored[["treatment"]]
 
-# Extract covariates
+# Extract covariates from main DF
 covariates <- char.censored[,c(14:22,23:63)] # inc missing dummies for now
 covariate.names <- names(covariates)
 
-# standardize
+# standardize features to have mean 0 and std 1
 covariates.scaled <- scale(covariates)
 processed.unscaled <- data.frame(Y, W, covariates)
 processed.scaled <- data.frame(Y, W, covariates.scaled)
 
-# training and test sets.
+# partition data into training and test sets.
 set.seed(44)
-smplmain <- sample(nrow(processed.scaled), round(9*nrow(processed.scaled)/10), replace=FALSE)
+sample.main <- sample(nrow(processed.scaled), round(9*nrow(processed.scaled)/10), replace=FALSE)
 
-processed.scaled.train <- processed.scaled[smplmain,]
-processed.scaled.test <- processed.scaled[-smplmain,]
+processed.scaled.train <- processed.scaled[sample.main,]
+processed.scaled.test <- processed.scaled[-sample.main,]
 
 y.train <- as.matrix(processed.scaled.train$Y, ncol=1)
 y.test <- as.matrix(processed.scaled.test$Y, ncol=1)
 
-# as formulas
+# create RHS of R formulas both with linear and second order interaction
 print(covariate.names)
 sumx = paste(covariate.names, collapse = " + ")  # "X1 + X2 + X3 + ..." for substitution later
 interx = paste(" (",sumx, ")^2", sep="")  # "(X1 + X2 + X3 + ...)^2" for substitution later
@@ -136,7 +137,7 @@ Next set some parameters for causal tree / forest
 
 ```{r obs setup.params, echo=T}
 # Create additional datasets
-
+#LA: Jack what is this for?
 processed.scaled.testW0 <- processed.scaled.test
 processed.scaled.testW0$W <- rep(0,nrow(processed.scaled.test))
 
@@ -146,6 +147,11 @@ processed.scaled.testW1$W <- rep(1,nrow(processed.scaled.test))
 # causal tree/forest params
 
 # Set parameters
+
+#go with honest Causal Tree Splitting/Cross Validation
+#with original weighting between MSE and variance term
+#and bucket splitting in the training process (w/ 5 buckets as a target)
+# and a minimum of 100 (50T + 50C) in each leaf
 split.Rule.temp = "CT"
 cv.option.temp = "CT"
 split.Honest.temp = T
@@ -171,27 +177,51 @@ Now lets try propensity forest. Remember no honest estimation here.
 
 # Propensity forest
 
-ncolx<-length(processed.scaled.train)-2 #total number of covariates
+#total number of covariates in our dataset
+ncolx <- ncol(processed.scaled.train)-2 
 ncov_sample<-floor(ncolx/3) #number of covariates (randomly sampled) to use to build tree
 
+#estimate the PF using no bucket splits and 50 obs total in each 
+#with 1/2 of the data resampled for each tree to estimate the tree,
+#1/2 used to CV
+#don't do honest splitting for evaluation of CT risk function.
+#but do use the CT risk criterion
+set.seed(92)
 pf <- propensityForest(as.formula(paste("Y~",sumx)), 
                        data=processed.scaled.train,
                        treatment=processed.scaled.train$W, 
+                       split.Rule = "CT",
+                       split.Honest = F,
+                       cv.option = "CT",
+                       cv.Honest = F,
                        split.Bucket=F, 
-                       sample.size.total = floor(nrow(processed.scaled.train) / 2), 
-                       nodesize = 25, num.trees=numtreesCT,
-                       mtry=ncov_sample, ncolx=ncolx, ncov_sample=ncov_sample )
+                       sample.size.total==floor(nrow(processed.scaled.train) / 2), 
+                       sample.size.train.frac=1, 
+                       nodesize = 25, num.trees=numtreesCT, ncolx=ncolx, ncov_sample=ncov_sample )
 
+#given our p-forest, predict average CATE for each test datapoint from each estimated tree
+#by averaging over all the trees
 pfpredtest <- predict(pf, newdata=processed.scaled.test, type="vector")
 
+#the predicted CATEs for the original test dataset
 pfpredtrainall <- predict(pf, newdata=processed.scaled.train, 
                           predict.all = TRUE, type="vector")
 print(c("mean of ATE treatment effect from propensityForest on Training data", 
         round(mean(pfpredtrainall$aggregate),5)))
+print(c("mean of ATE treatment effect from propensityForest on Test data",
+         round(mean(pfpredtest),5)))
+#calculate the variance of the individual estimates of the treatment effects for each individual
+#in the training data
+pfvar.train <- infJack(pfpredtrainall$individual, pf$inbag, calibrate = TRUE)
+plot(pfvar.train)
 
-pfvar <- infJack(pfpredtrainall$individual, pf$inbag, calibrate = TRUE)
-plot(pfvar)
 
+#plot "true" propensity score versus CATE from propensity forest
+#using test dataset
+ggplot(char.censored[-sample.main,],aes(y=pfpredtest,x=ps.true)) + geom_point(alpha=.5) +
+  geom_smooth(fill=NA,method='loess') + 
+  ylab('CATE') + xlab('Propensity Score')
+ggsave('./plots/PFCATEvPS.pdf')
 ```
 
 # Now lets try gradient forest, first without residualizing
@@ -203,8 +233,14 @@ X.test = as.matrix(processed.scaled.test[,covariate.names])
 Y  = as.matrix(processed.scaled.train[,"Y"])
 W  = as.matrix(processed.scaled.train[,"W"])
 
-gf <- causal.forest(X, Y, W, num.trees = numtreesGF, ci.group.size = 4,
-                    precompute.nuisance = FALSE)
+#do gradient forest estimation of causal forest w/ honest splitting
+set.seed(93)
+gf <- causal.forest(X, Y, W,sample.fraction=.5,
+                    num.trees = numtreesGF, ci.group.size = 4,
+                    honesty=T,min.node.size = 50,
+                    mtry=ncov_sample,
+                    precompute.nuisance = FALSE,seed=93)
+#predict training-out-of-bag CATEs, then test CATEs from causal forest in GF pkg.
 preds.causal.oob = predict(gf, estimate.variance=TRUE)
 preds.causal.test = predict(gf, X.test, estimate.variance=TRUE)
 
@@ -216,34 +252,72 @@ plot(preds.causal.oob$predictions, preds.causal.oob$variance.estimates)
 mean(preds.causal.test$predictions)  
 plot(preds.causal.test$predictions, preds.causal.test$variance.estimates)
 
+#we get very similar estimations.
+
 ```
 
 # Next the same but residualizing
 
 ```{r obs gradient.forest.res, echo=T}
 
-# orthogonalize Y
-Yrf <- regression.forest(X, Y, num.trees = numtreesGF, ci.group.size = 4)
+# estimate conditional means of Y|X using regression forests, then subtract to obtain residuals
+#don't need CI so don't build multiple trees on each subsample.
+seed(99)
+Yrf <- regression.forest(X, Y, num.trees = numtreesGF,min.node.size=50, 
+                         sample.fraction=.5,honesty=T,mtry=ncov_sample,
+                         ci.group.size = 1)
 Yresid <- Y - predict(Yrf)$prediction
 
-# orthogonalize W 
-Wrf <- regression.forest(X, W, num.trees = numtreesGF, ci.group.size = 4)
+# same as above but for the treatment indicator
+Wrf <- regression.forest(X, W, num.trees = numtreesGF,min.node.size=50, 
+                         sample.fraction=.5,honesty=T,mtry=ncov_sample,
+                         ci.group.size = 1)
 Wresid <- W - predict(Wrf)$predictions
 
+#do the same thing as before but now on the residuals
+gf.resids <- causal.forest(X,Yresid,Wresid,sample.fraction=.5,
+                    num.trees = numtreesGF, ci.group.size = 4,
+                    honesty=T,min.node.size = 50,
+                    mtry=ncov_sample,
+                    precompute.nuisance = FALSE,seed=93)
 
-gfr <- causal.forest(X,Yresid,Wresid,num.trees=numtreesGF, ci.group.size=4, 
-                     precompute.nuisance = FALSE)
+#the following code does the same residualization but within the causal.forest call
+gf.resids.within <- causal.forest(X,Y,W,sample.fraction=.5,
+                    num.trees = numtreesGF, ci.group.size = 4,
+                    honesty=T,min.node.size = 50,
+                    mtry=ncov_sample,
+                    precompute.nuisance = TRUE,seed=93)
 
-# training set
-preds.causalr.oob = predict(gfr, estimate.variance=TRUE)
+
+#validate by comparing the two outputs
+
+# training set out of bag estimates
+preds.causalr.oob = predict(gf.resids, estimate.variance=TRUE)
 mean(preds.causalr.oob$predictions)  
-plot(preds.causalr.oob$predictions, preds.causal.oob$variance.estimates)
+plot(preds.causalr.oob$predictions, preds.causalr.oob$variance.estimates)
+
+
 
 # test set (honest)
 Xtest = as.matrix(processed.scaled.test[,covariate.names])
-preds.causalr.test = predict(gfr, Xtest, estimate.variance=TRUE)
+preds.causalr.test = predict(gf.resids, Xtest, estimate.variance=TRUE)
+preds.causalr.test.within = predict(gf.resids.within, Xtest, estimate.variance=TRUE)
 mean(preds.causalr.test$predictions)  
-plot(preds.causalr.test$predictions, preds.causal.test$variance.estimates)
+mean(preds.causalr.test.within$predictions)  
 
+plot(preds.causalr.test$predictions, preds.causalr.test$variance.estimates)
+
+plot(preds.causalr.test$predictions,preds.causalr.test.within$predictions)
+
+#mean much closer to truth in the residualized GF routine
+
+#compare variances w/ and w/o residuals
+print('Average Variance of CATEs by residualization')
+print('raw scaled data:')
+mean(preds.causal.test$variance.estimates) 
+print('with residuals: ')
+mean(preds.causalr.test.within$variance.estimates) 
+
+#residualizing increases variance due to random component of the conditional mean estimation?
 
 ```

@@ -14,8 +14,9 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r load, echo=F, message=FALSE, warning=FALSE}
 # set your working directory
 
-setwd("C:/Users/Jack/Documents/Git/AtheyMLhw2") # Jack
-#setwd('/home/luis/AtheyMLhw1') #Luis
+#setwd("C:/Users/Jack/Documents/Git/AtheyMLhw2") # Jack
+
+setwd('/home/luis/AtheyMLhw2') #Luis
 # clear things in RStudio
 
 rm(list = ls())
@@ -37,13 +38,20 @@ library(plyr)
 library(gradient.forest)
 library(glmnet)
 
-
 # set seed
-set.seed(12345)
+set.seed(1992)
 
 fname <- 'Data/charitable_withdummyvariables.csv'
 char <- read.csv(fname)
 
+#replace -999s with 0s (since there are already missing dummies)
+for (v in names(char)){
+  mi_v <- paste(v,'_missing',sep='') 
+  if (mi_v %in% names(char)){
+    print(paste('fixing',v))
+    char[(char[,mi_v]==1),v]<-0
+  }
+}
 ```
 
 Setup our data ready to feed into functions
@@ -57,7 +65,7 @@ Y <- char[["out_amountgive"]]
 W <- char[["treatment"]]
 
 # Extract covariates
-covariates <- char[,c(14:22,23:63)] # inc missing dummies for now
+covariates <- char[,c(14:22,23:63)] # include missing dummies for now
 covariate.names <- names(covariates)
 
 # standardize
@@ -66,29 +74,32 @@ processed.unscaled <- data.frame(Y, W, covariates)
 processed.scaled <- data.frame(Y, W, covariates.scaled)
 
 # training, validation, and test sets.
+#split evenly into 1/3,1/3,1/3 samples
 set.seed(46)
-smplmain <- sample(nrow(processed.scaled), round(2*nrow(processed.scaled)/3), replace=FALSE)
+sample.main <- sample(nrow(processed.scaled), round(2*nrow(processed.scaled)/3), replace=FALSE)
 
-processed.scaled.train <- processed.scaled[smplmain,]
-processed.scaled.test.C <- processed.scaled[-smplmain,]
+processed.scaled.train <- processed.scaled[sample.main,]
+processed.scaled.test.C <- processed.scaled[-sample.main,]
 
 y.train <- as.matrix(processed.scaled.train$Y, ncol=1)
-y.test <- as.matrix(processed.scaled.test.C$Y, ncol=1)
+y.test.C <- as.matrix(processed.scaled.test.C$Y, ncol=1)
 
 # equal sized sets
-smplcausal <- sample(nrow(processed.scaled.train), 
-                     round(5*nrow(processed.scaled.train)/10), replace=FALSE)
-processed.scaled.train.A <- processed.scaled.train[smplcausal,]
-processed.scaled.train.B <- processed.scaled.train[-smplcausal,]
-
-# combination of B and C
+sample.causal <- sample(nrow(processed.scaled.train), 
+                     round(nrow(processed.scaled.train)/2), replace=FALSE)
+processed.scaled.train.A <- processed.scaled.train[sample.causal,]
+processed.scaled.train.B <- processed.scaled.train[-sample.causal,]
+y.train.1 <- y.train[sample.causal]
+y.train.2 <- y.train[-sample.causal]
+# combination of B and C (stuff we don't directly train on)
 
 processed.scaled.test.B.C <- rbind(processed.scaled.train.B,processed.scaled.test.C)
 
-# as formulas
+# write out RHS formulas for lasso heterogeneity
 print(covariate.names)
 sumx = paste(covariate.names, collapse = " + ")  # "X1 + X2 + X3 + ..." for substitution later
 interx = paste(" (",sumx, ")^2", sep="")  # "(X1 + X2 + X3 + ...)^2" for substitution later
+
 
 # Y ~ X1 + X2 + X3 + ... 
 linearnotreat <- paste("Y",sumx, sep=" ~ ")
@@ -106,25 +117,23 @@ linearhet <- paste("Y", paste("W * (", sumx, ") ", sep=""), sep=" ~ ")
 linearhet <- as.formula(linearhet)
 linearhet
 
-# Propensity score
+#calculate unconditional prop. of treatment within each sample.
 processed.scaled.test.C$propens <- mean(processed.scaled.test.C$W)
 processed.scaled.test.B.C$propens <- mean(processed.scaled.test.B.C$W)
 
+
 # Randomized experiment. Use constant propensity score.
-# Build Ystar to evaluate methods against
+# Build Ystar whose Expectation=ATE to evaluate methods against
 
 processed.scaled.test.C$Ystar <- processed.scaled.test.C$W * (processed.scaled.test.C$Y/processed.scaled.test.C$propens) -
   (1-processed.scaled.test.C$W) * (processed.scaled.test.C$Y/(1-processed.scaled.test.C$propens))
 
 
 ## Also do this for B.C union
-
 processed.scaled.test.B.C$Ystar <- processed.scaled.test.B.C$W * (processed.scaled.test.B.C$Y/processed.scaled.test.B.C$propens) -
   (1-processed.scaled.test.B.C$W) * (processed.scaled.test.B.C$Y/(1-processed.scaled.test.B.C$propens))
 
-## Some additional datasets useful later
-
-
+# articificially assign B/C samples to treat/control for  ATE calculation later
 processed.scaled.test.CW0 <- processed.scaled.test.C
 processed.scaled.test.CW0$W <- rep(0,nrow(processed.scaled.test.C))
 
@@ -167,74 +176,104 @@ minsize.temp=50
 
 
 # number of trees (try 1000 once all working)
-numtreesCT <- 100
-numtreesGF <- 100
+numtreesCT <- 1000
+numtreesGF <- 1000
+
+
+# Set parameters
+split.Rule.temp = "CT"
+cv.option.temp = "CT"
+split.Honest.temp = T
+cv.Honest.temp = T
+#do regular honest weighting
+split.alpha.temp = .5
+cv.alpha.temp = .5
+#do bucket splitting for now
+split.Bucket.temp = T
+bucketMax.temp= 100
+bucketNum.temp = 10
+minsize.temp=50
+
+ncolx<-length(processed.scaled.train)-3 # number of possible covariates to bag from
+ncov_sample<-floor(ncolx/3) #number of covariates (randomly sampled) to use to build tree
+# ncov_sample<-p #use this line if all covariates need to be used in all trees
+
 
 ```
 
-Use LASSO to estimate heterogeneous causal effects
+Use LASSO to estimate heterogeneous causal effects on Sample A
 
 ```{r obs lasso.het, echo=T}
 
 # setup models
 
+#create feature matrix for lasso W-int regression
 #linear.train <- model.matrix(linearhet, processed.scaled.train)[,-1]
 linear.test <- model.matrix(linearhet, processed.scaled.test.C)[,-1]
 linear.train.1 <- model.matrix(linearhet, processed.scaled.train.A)[,-1]
 linear.train.2 <- model.matrix(linearhet, processed.scaled.train.B)[,-1]
 
-# set penalty factor for coef on perbush lower
+# set lower penalty factor for coef on perbush lower + interaction w/ W
 p.fac = rep(1, 1 + 2*ncol(covariates))
-p.fac[c(19,ncol(covariates) + 19)] = 0
+names(p.fac) <- colnames(linear.train.1)
+p.fac['W']=0
+#p.fac['hpa']=0.5
+#p.fac['W:hpa'] = 0.5
+#p.fac['perbush']=0.5
+#p.fac['W:perbush']=0.5
 
-# set penalty factor for coef on previous donations low
-#p.fac[c(2, ncol(covariates) + 2)] = 0
 
-# Fit lasso on A
-lasso.linear <- cv.glmnet(linear.train.1, y.train[smplcausal,],  alpha=1, parallel=TRUE, penalty.factor = p.fac)
+# Fit lasso on sample A w/ L1 penalty
+set.seed(1992)
+lasso.linear <- cv.glmnet(linear.train.1, y.train.1,  alpha=1, parallel=TRUE, 
+                          nfolds=10,penalty.factor = p.fac)
 #lasso.linear
 
-# plot & select the optimal shrinkage parameter lambda
+# List non-zero coefficients
+opt.lasso.coefs<-coef(lasso.linear,s='lambda.min')
+selected.vars<-rownames(opt.lasso.coefs)[as.logical(opt.lasso.coefs!=0)][-1]
+print(selected.vars)
+
+# plot CV performance over complexity parameter
 plot(lasso.linear)
+
+
 lasso.linear$lambda.min # min average CV error
 lasso.linear$lambda.1se #  error within one s.e. of min
 
-# List non-zero coefficients
-coef <- predict(lasso.linear, type = "nonzero")
-colnames <- colnames(linear.train.1)
-selected.vars <- colnames[unlist(coef)]
-print(selected.vars)
 
-# set up as formula for post OLS
-linearwithlass <- paste("Y", paste(append(selected.vars, "W"),collapse=" + "), sep = " ~ ") 
-linearwithlass <- as.formula(linearwithlass)
+
+# set up as formula for post-selection OLS
+#postOLS <- paste("Y", paste(append(selected.vars, "W"),collapse=" + "), sep = " ~ ") 
+postOLS <- paste("Y ~",paste(selected.vars,collapse="+"))
+postOLS <- as.formula(postOLS)
 
 # OLS using these coefficients on sample A
-lm.linear.lasso.A <- lm(linearwithlass, data=processed.scaled.train.A)
+lm.linear.lasso.A <- lm(postOLS, data=processed.scaled.train.A)
 summary(lm.linear.lasso.A)
 
 # OLS using these coefficients on sample B
-lm.linear.lasso.B <- lm(linearwithlass, data=processed.scaled.train.B)
+lm.linear.lasso.B <- lm(postOLS, data=processed.scaled.train.B)
 summary(lm.linear.lasso.B)
 
 # OLS using these coefficients on sample C
-lm.linear.lasso.C <- lm(linearwithlass, data=processed.scaled.test.C)
+lm.linear.lasso.C <- lm(postOLS, data=processed.scaled.test.C)
 summary(lm.linear.lasso.C)
 
 # OLS using union of samples B and C
 
-lm.linear.lasso.B.C <- lm(linearwithlass, data=processed.scaled.test.B.C)
+lm.linear.lasso.B.C <- lm(postOLS, data=processed.scaled.test.B.C)
 summary(lm.linear.lasso.B.C)
 
-# Predict on union of B and C for average treatment effect 
-
+##############
+# Predict Y on union of B and C from postOLS regression, under two counterfactual treatments, for average treatment effect
 predictedW0 <- predict(lm.linear.lasso.B.C, newdata=processed.scaled.test.B.CW0)
 
 predictedW1 <- predict(lm.linear.lasso.B.C, newdata=processed.scaled.test.B.CW1)
 
 lassocauseff <- predictedW1-predictedW0
-
-# calculate MSE against Ystar
+print(mean(lassocauseff))
+# calculate MSE against Ystar (whose expectation is CATE)
 lassoMSEstar <- mean((processed.scaled.test.B.C$Ystar-lassocauseff)^2)
 print(c("MSE using ystar on test set of lasso",lassoMSEstar))
 MSElabelvec <- append(MSElabelvec,"lasso")
@@ -247,65 +286,49 @@ MSEvec <- append(MSEvec,lassoMSEstar)
 
 ```{r hon.causal.tree, echo=T}
 
-# Set parameters
-split.Rule.temp = "CT"
-cv.option.temp = "CT"
-split.Honest.temp = T
-cv.Honest.temp = T
-split.alpha.temp = .5
-cv.alpha.temp = .5
-split.Bucket.temp = T
-bucketMax.temp= 100
-bucketNum.temp = 5
-minsize.temp=50
 
-# honest version (fit on A + B, estimate on C)
+
+# fit a CT on A, estimate on B
 CTtree <- honest.causalTree(as.formula(paste("Y~",sumx)), 
-                   data=processed.scaled.train, treatment=processed.scaled.train$W, 
-                   est_data = processed.scaled.test.C, est_treatment = processed.scaled.test.C$W,
-                   split.Rule=split.Rule.temp, split.Honest=split.Honest.temp, 
-                   split.Bucket=split.Bucket.temp, bucketNum = bucketNum.temp, 
-                   bucketMax = bucketMax.temp, cv.option=cv.option.temp, #cv.Honest=cv.Honest.temp, 
+                   data=processed.scaled.train.A, treatment=processed.scaled.train.A$W, 
+                   est_data = processed.scaled.train.B, est_treatment = processed.scaled.train.B$W,
+                   split.Rule=split.Rule.temp,split.Honest=split.Honest.temp,
+                   split.Bucket=split.Bucket.temp, bucketNum = bucketNum.temp, bucketMax = bucketMax.temp,
+                   cv.option=cv.option.temp, cv.Honest=cv.Honest.temp,
                    minsize = minsize.temp, 
                    split.alpha = split.alpha.temp, cv.alpha = cv.alpha.temp, 
-                   HonestSampleSize=nrow(processed.scaled.test.C))
+                   HonestSampleSize=nrow(processed.scaled.train.B))
 
-opcpid <- which.min(CTtree$cp[,4])
+#choose the optimal complexity penalty based on cross validation error
+opcpid <- which.min(CTtree$cp[,'xerror'])
 opcp <- CTtree$cp[opcpid,1]
 tree_honest_CT_prune <- prune(CTtree, cp = opcp) 
+#plot CV-tunes optimal honest tree
 print(tree_honest_CT_prune)
+prp(tree_honest_CT_prune)
 
-# leaf treatment effects on A+B,A,B,C and B + C
 
-processed.scaled.train$leaffact <- as.factor(round(predict(tree_honest_CT_prune, 
-                                        newdata=processed.scaled.train,type="vector"),4))
-
+# create leaf IDs for samples A,B,C up to 4 decimal places
 processed.scaled.train.A$leaffact <- as.factor(round(predict(tree_honest_CT_prune, 
                                         newdata=processed.scaled.train.A,type="vector"),4))
 
 processed.scaled.train.B$leaffact <- as.factor(round(predict(tree_honest_CT_prune, 
-                                                             newdata=processed.scaled.train.B,type="vector"),4))
+                                        newdata=processed.scaled.train.B,type="vector"),4))
 
 processed.scaled.test.C$leaffact <- as.factor(round(predict(tree_honest_CT_prune, 
-                                                             newdata=processed.scaled.test.C,type="vector"),4))
+                                        newdata=processed.scaled.test.C,type="vector"),4))
 
-processed.scaled.test.B.C$leaffact <- as.factor(round(predict(tree_honest_CT_prune, 
-                                                             newdata=processed.scaled.test.B.C,type="vector"),4))
 
 # These show leaf treatment effects and standard errors; can test hypothesis that leaf 
 # treatment effects are 0
-summary(lm(Y~leaffact+W*leaffact-W-1, data=processed.scaled.train))
 summary(lm(Y~leaffact+W*leaffact-W-1, data=processed.scaled.train.A))
 summary(lm(Y~leaffact+W*leaffact-W-1, data=processed.scaled.train.B))
 summary(lm(Y~leaffact+W*leaffact-W-1, data=processed.scaled.test.C))
-summary(lm(Y~leaffact+W*leaffact-W-1, data=processed.scaled.test.B.C))
 
-# Test whether leaf treatment effects are different than average
-
+# Test whether each leaf treatment effects are different than ATE (uninteracted W)
 summary(lm(Y~leaffact+W*leaffact-1, data=processed.scaled.test.C))
 
-# Predict using C
-
+# Predict using C (test data)
 CTpredict = predict(tree_honest_CT_prune, newdata=processed.scaled.test.C, type="vector")
 
 # calculate MSE against Ystar
@@ -317,35 +340,41 @@ MSEvec <- append(MSEvec,CTMSEstar)
 
 ```
 
- Now lets use causalForest from the causalTree package
+ Now lets use causalForest from the causalTree package.
+ Note: Currently CF from CT pkg gives degenerate trees; while gradient forest produces sensible expected results
 
 ```{r obs causal.f, echo=T}
 
-ncolx<-length(processed.scaled.train)-3 # number of covariates
-ncov_sample<-floor(2*ncolx/3) #number of covariates (randomly sampled) to use to build tree
+ncolx<-length(processed.scaled.train)-3 # number of possible covariates to bag from
+ncov_sample<-floor(ncolx/3) #number of covariates (randomly sampled) to use to build tree
 # ncov_sample<-p #use this line if all covariates need to be used in all trees
 
 # set seed
 set.seed(123)
 # now estimate a causalForest. Train on A and B.
-cf <- causalForest(as.formula(paste("Y~",sumx)), data=processed.scaled.train, 
-                   treatment=processed.scaled.train$W, 
-                   split.Rule="CT", double.Sample = T, split.Honest=T,  split.Bucket=T, 
-                   bucketNum = 5,
-                   bucketMax = 100, cv.option="CT", cv.Honest=T, minsize = 50, 
-                   split.alpha = 0.5, cv.alpha = 0.5,
-                   sample.size.total = floor(nrow(processed.scaled.train) / 2), 
+#no need to split independently A/B since the forest routine does this honest splitting for us
+rm(cf)
+cf.formula<-as.formula(paste("Y~",sumx))
+cf <- causalForest(cf.formula, data=processed.scaled.train.A, 
+                   treatment=processed.scaled.train.A$W,  double.Sample = T,
+                   split.Rule=split.Rule.temp, split.Honest=split.Honest.temp,  
+                   split.Bucket=F, 
+                   bucketNum = bucketNum.temp,
+                   bucketMax = bucketMax.temp, cv.option=cv.option.temp, 
+                   cv.Honest=cv.Honest.temp, minsize = 5, 
+                   split.alpha = split.alpha.temp, cv.alpha = cv.alpha.temp,
+                   sample.size.total = floor(nrow(processed.scaled.train)*.5), 
                    sample.size.train.frac = .5,
-                   mtry = ncov_sample, nodesize = 5, 
-                   num.trees= numtreesCT,ncolx=ncolx,ncov_sample=ncov_sample) 
+                   num.trees= 10,
+                   ncolx=ncolx,ncov_sample=ncov_sample) 
 
-# Test on C.
 cfpredtest <- predict(cf, newdata=processed.scaled.test.C, type="vector")
-print(cfpredtest)
 
-cfpredtrainall <- predict(cf, newdata=processed.scaled.train, 
+
+cfpredtrainall <- predict(cf, newdata=processed.scaled.train.A, 
                           predict.all = TRUE, type="vector")
-
+summary(c(cfpredtrainall$individual))
+summary(cfpredtrainall$aggregate)
 # MSE against Ystar
 cfMSEstar <- mean((processed.scaled.test.C$Ystar-cfpredtest)^2)
 print(c("MSE using ystar on test set of causalTree/causalForest",cfMSEstar))
@@ -365,42 +394,6 @@ cfvar <- infJack(cfpredtrainall$individual, cf$inbag, calibrate = TRUE)
 plot(cfvar)
 
 
-# plot in two dimensions while holding others at their medians
-
-processed.scaled.train$leaffact <- NULL # drop this temporary var
-
-namesD <- names(processed.scaled.train)
-D = as.matrix(processed.scaled.train)
-medians = apply(D, 2, median)
-
-unique.hpa = sort(unique(as.numeric(D[,"hpa"])))
-unique.perbush = sort(unique(as.numeric(D[,"perbush"])))
-unique.vals = expand.grid(hpa = unique.hpa, perbush = unique.perbush)
-
-D.focus = outer(rep(1, nrow(unique.vals)), medians)
-D.focus[,"hpa"] = unique.vals[,"hpa"]
-D.focus[,"perbush"] = unique.vals[,"perbush"]
-D.focus = data.frame(D.focus)
-numcol = ncol(D.focus)
-names(D.focus) = namesD
-
-direct.df = expand.grid(hpa=factor(unique.hpa), perbush=factor(unique.perbush))
-direct.df$cate=  predict(cf, newdata=D.focus, type="vector", predict.all=F)
-
-#heatmapdata <- direct.df
-#heatmapdata <- heatmapdata[,c("hpa","perbush","cate")]
-#heatmapdata <- heatmapdata[order(heatmapdata$hpa),]
-#heatmapdata <- dcast(heatmapdata, hpa~perbush, mean)#
-
-#heatmapdata <- heatmapdata[,!(names(heatmapdata) %in% c("hpa"))]
-
-#need to remove the labels from this heatmap--to do
-#heatmap(as.matrix(heatmapdata), Rowv=NA, Colv=NA, col = cm.colors(256), scale="column", margins=c(5,10),
-#        labCol<-rep("",ncol(heatmapdata)), labRow<-rep("",nrow(heatmapdata)))
-
-
-# gg plot
-ggplot(direct.df, aes(hpa,perbush)) + geom_tile(aes(fill = cate)) 
 
 
 ```
@@ -408,7 +401,7 @@ ggplot(direct.df, aes(hpa,perbush)) + geom_tile(aes(fill = cate))
 Now lets use the gradient.forest package
 
 ```{r gradient.forest, echo=T}
-
+##############################
 # label some variables
 X = as.matrix(processed.scaled.train[,covariate.names])
 X.test = as.matrix(processed.scaled.test.C[,covariate.names])
@@ -416,19 +409,63 @@ Y  = as.matrix(processed.scaled.train[,"Y"])
 W  = as.matrix(processed.scaled.train[,"W"])
 
 # run gradient forest
-gf <- causal.forest(X, Y, W, num.trees = numtreesGF, ci.group.size = 4,
-                    precompute.nuisance = FALSE)
+cf.gf <- causal.forest(X, Y, W, num.trees = 1000, 
+                       sample.fraction=.5,
+                       mtry = ncov_sample,
+                       honesty=T,
+                       min.node.size = minsize.temp,
+                       ci.group.size = 4,
+                       precompute.nuisance = FALSE,seed=1992)
 
 # Predict on training and test sets
-preds.causal.oob = predict(gf, estimate.variance=TRUE)
-preds.causal.test = predict(gf, X.test, estimate.variance=TRUE)
-mean(preds.causal.oob$predictions)  
-plot(preds.causal.oob$predictions, preds.causal.oob$variance.estimates)
-
-
+preds.causal.oob = predict(cf.gf, estimate.variance=TRUE)
+preds.causal.test = predict(cf.gf, X.test, estimate.variance=TRUE)
+summary(preds.causal.test$predictions)  
 mean(preds.causal.test$predictions)  
-plot(preds.causal.test$predictions, preds.causal.test$variance.estimates)
 
+
+#plot heatmap of perbushXhpa ATE
+processed.scaled.train$leaffact <- NULL # drop this temporary var
+#create fake dataset of all of the possible combos of perbush and hpa
+#with medians elsewhere
+namesD <- names(processed.scaled.train)
+D = as.matrix(processed.scaled.train)
+medians = apply(D, 2, median)
+
+unique.hpa = sort(unique(as.numeric(D[,"hpa"])))
+#unique.hpa = seq(min(processed.scaled.train$hpa),max(processed.scaled.train$hpa),length.out=200)
+
+unique.perbush = sort(unique(as.numeric(D[,"perbush"])))
+#unique.perbush = seq(min(processed.scaled.train$perbush[processed.scaled.train$perbush_missing==
+#                                                          min(processed.scaled.train$perbush_missing)]),
+#                     max(processed.scaled.train$perbush[processed.scaled.train$perbush_missing==
+#                                                          min(processed.scaled.train$perbush_missing)]),
+#                     length.out=200)
+unique.vals = expand.grid(hpa = unique.hpa, perbush = unique.perbush)
+
+D.focus = outer(rep(1, nrow(unique.vals)), medians)
+D.focus[,"hpa"] = unique.vals[,"hpa"]
+D.focus[,"perbush"] = unique.vals[,"perbush"]
+D.focus = data.frame(D.focus[,c(-1,-2)])
+numcol = ncol(D.focus)
+names(D.focus) = namesD[c(-1,-2)]
+df.heat = expand.grid(hpa=unique.hpa, perbush=unique.perbush)
+
+df.heat$cate=  predict(cf.gf, newdata=D.focus,estimate.variance=FALSE)$predictions
+df.heat$hpa <- df.heat$hpa *sd(char[,'hpa']) + mean(char[,'hpa'])
+df.heat$perbush <- df.heat$perbush *sd(char[,'perbush']) + mean(char[,'perbush'])
+
+
+#ggplot(df.heat, aes(x=hpa,y=perbush,fill=cate,colour=cate)) + geom_tile() +
+#  scale_fill_gradient(low = "red", high = "blue") + scale_colour_gradient(low = "red", high = "blue")
+
+#ggplot(df.heat, aes(x=hpa,y=perbush,fill=cate)) + geom_raster(interpolate=F) 
+ggplot(df.heat, aes(x=factor(hpa),y=factor(perbush),fill=cate,colour=cate)) + geom_tile() +
+  scale_x_discrete(breaks = levels(factor(df.heat$hpa))[c(T, rep(F, 50))]) +
+  scale_y_discrete(breaks = levels(factor(df.heat$perbush))[c(T, rep(F, 9))]) + 
+  ylab("% voted for Bush in '04 ")  + xlab('Previous contribution ($)') +
+  scale_fill_gradient(low = "red", high = "blue") + scale_colour_gradient(low = "red", high = "blue")
+ggsave('heatmap.pdf')
 
 # calculate MSE against Ystar
 gfMSEstar <- mean((processed.scaled.test.C$Ystar-preds.causal.test$predictions)^2)
@@ -436,20 +473,20 @@ print(c("MSE using ystar on test set of gradient causal forest",gfMSEstar))
 MSElabelvec <- append(MSElabelvec,"gradient causal forest")
 MSEvec <- append(MSEvec,gfMSEstar)
 
-# Now lets try with orthogonalization of Y (not W since random assignment)
+# Now lets try with orthogonalization of Y (no W since random assignment)
 
 Yrf <- regression.forest(X, Y, num.trees = numtreesGF, ci.group.size = 4)
 Yresid <- Y - predict(Yrf)$prediction
 
 
-gfr <- causal.forest(X,Yresid,W,num.trees=numtreesGF, ci.group.size=4, 
+cf.gfr <- causal.forest(X,Yresid,W,num.trees=numtreesGF, ci.group.size=4, 
                      precompute.nuisance = FALSE)
-preds.causalr.oob = predict(gfr, estimate.variance=TRUE)
+preds.causalr.oob = predict(cf.gfr, estimate.variance=TRUE)
 mean(preds.causalr.oob$predictions)  
-plot(preds.causalr.oob$predictions, preds.causal.oob$variance.estimates)
+plot(preds.causalr.oob$predictions, preds.causalr.oob$variance.estimates)
 
 Xtest = as.matrix(processed.scaled.test.C[,covariate.names])
-preds.causalr.test = predict(gfr, Xtest, estimate.variance=TRUE)
+preds.causalr.test = predict(cf.gfr, Xtest, estimate.variance=TRUE)
 mean(preds.causalr.test$predictions)  
 plot(preds.causalr.test$predictions, preds.causal.test$variance.estimates)
 
@@ -460,3 +497,4 @@ MSElabelvec <- append(MSElabelvec,"orth causal gradient forest")
 MSEvec <- append(MSEvec,gfrMSEstar)
 
 ```
+
