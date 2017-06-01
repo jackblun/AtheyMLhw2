@@ -91,7 +91,8 @@ prop.treat <-  mean(char$treatment)
 char$ps.select.t <- ps.fcn(char$perbush,char$cases,char$hpa,1)
 char$ps.select.c <- ps.fcn(char$perbush,char$cases,char$hpa,0)
 char$ps.true <- (prop.treat*char$ps.select.t)/(prop.treat*char$ps.select.t + (1 - prop.treat)*char$ps.select.c)
-
+char$ps.true[which(char$perbush_missing==1
+            | char$cases_missing==1)] <- prop.treat
 char.censored <- char[selection,] #remove observations via propensity score rule
 
 
@@ -166,7 +167,7 @@ minsize.temp=50
 
 # number of trees (try 1000 once all working)
 numtreesCT <- 1000
-numtreesGF <- 1000
+numtreesGF <- 5000
 
 ```
 
@@ -190,10 +191,6 @@ set.seed(92)
 pf <- propensityForest(as.formula(paste("Y~",sumx)), 
                        data=processed.scaled.train,
                        treatment=processed.scaled.train$W, 
-                       split.Rule = "CT",
-                       split.Honest = F,
-                       cv.option = "CT",
-                       cv.Honest = F,
                        split.Bucket=F, 
                        sample.size.total==floor(nrow(processed.scaled.train) / 2), 
                        sample.size.train.frac=1, 
@@ -250,7 +247,7 @@ plot(preds.causal.oob$predictions, preds.causal.oob$variance.estimates)
 
 # test set (honest)
 mean(preds.causal.test$predictions)  
-plot(preds.causal.test$predictions, preds.causal.test$variance.estimates)
+ggplot(data.frame(preds.causal.test),aes(x=preds.causal.test$predictions, y=preds.causal.test$variance.estimates)) + geom_point(alpha=.1)
 
 #we get very similar estimations.
 
@@ -262,7 +259,7 @@ plot(preds.causal.test$predictions, preds.causal.test$variance.estimates)
 
 # estimate conditional means of Y|X using regression forests, then subtract to obtain residuals
 #don't need CI so don't build multiple trees on each subsample.
-seed(99)
+set.seed(99)
 Yrf <- regression.forest(X, Y, num.trees = numtreesGF,min.node.size=50, 
                          sample.fraction=.5,honesty=T,mtry=ncov_sample,
                          ci.group.size = 1)
@@ -281,12 +278,6 @@ gf.resids <- causal.forest(X,Yresid,Wresid,sample.fraction=.5,
                     mtry=ncov_sample,
                     precompute.nuisance = FALSE,seed=93)
 
-#the following code does the same residualization but within the causal.forest call
-gf.resids.within <- causal.forest(X,Y,W,sample.fraction=.5,
-                    num.trees = numtreesGF, ci.group.size = 4,
-                    honesty=T,min.node.size = 50,
-                    mtry=ncov_sample,
-                    precompute.nuisance = TRUE,seed=93)
 
 
 #validate by comparing the two outputs
@@ -294,21 +285,24 @@ gf.resids.within <- causal.forest(X,Y,W,sample.fraction=.5,
 # training set out of bag estimates
 preds.causalr.oob = predict(gf.resids, estimate.variance=TRUE)
 mean(preds.causalr.oob$predictions)  
-plot(preds.causalr.oob$predictions, preds.causalr.oob$variance.estimates)
+#plot(preds.causalr.oob$predictions, preds.causalr.oob$variance.estimates)
 
 
 
 # test set (honest)
 Xtest = as.matrix(processed.scaled.test[,covariate.names])
 preds.causalr.test = predict(gf.resids, Xtest, estimate.variance=TRUE)
-preds.causalr.test.within = predict(gf.resids.within, Xtest, estimate.variance=TRUE)
 mean(preds.causalr.test$predictions)  
-mean(preds.causalr.test.within$predictions)  
+#preds.causalr.test.within = predict(gf.resids.within, Xtest, estimate.variance=TRUE)
 
 plot(preds.causalr.test$predictions, preds.causalr.test$variance.estimates)
 
-plot(preds.causalr.test$predictions,preds.causalr.test.within$predictions)
-
+#compare residualization against non-residualized estimates
+pdf('./plots/residGFcomp.pdf')
+plot(preds.causal.test$predictions,preds.causalr.test$predictions, 
+     xlab='GF CATEs (no residualization)',ylab='GF CATEs (pre-residualized)')
+abline(0,1)
+dev.off()
 #mean much closer to truth in the residualized GF routine
 
 #compare variances w/ and w/o residuals
@@ -316,8 +310,18 @@ print('Average Variance of CATEs by residualization')
 print('raw scaled data:')
 mean(preds.causal.test$variance.estimates) 
 print('with residuals: ')
-mean(preds.causalr.test.within$variance.estimates) 
+mean(preds.causalr.test$variance.estimates) 
 
-#residualizing increases variance due to random component of the conditional mean estimation?
+
+#the following code does the same residualization but within the causal.forest call
+gf.resids.within <- causal.forest(X,Y,W,sample.fraction=.5,
+                    num.trees = numtreesGF, ci.group.size = 4,
+                    honesty=T,min.node.size = 50,
+                    mtry=ncov_sample,
+                    precompute.nuisance = TRUE,seed=93)
+preds.causalr.test.within = predict(gf.resids.within, Xtest, estimate.variance=TRUE)
+mean(preds.causalr.test.within$predictions)  
+
+plot(preds.causalr.test$predictions,preds.causalr.test.within$predictions)
 
 ```
